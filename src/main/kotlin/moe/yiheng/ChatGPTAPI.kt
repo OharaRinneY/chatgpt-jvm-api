@@ -17,21 +17,24 @@ import kotlinx.coroutines.*
 import java.io.Closeable
 import java.util.*
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * ChatGPT API
  * remember close after use.
- * @param sessionToken session token from cookie
+ * @param sessionToken session token from cookie.
+ * @param timeout timeout for each conversation. default is 5 minutes.
  * @param apiBaseUrl optional, default is https://chat.openai.com/api
  * @param backendApiBaseUrl optional, default is https://chat.openai.com/backend-api
  * @param userAgent optional
  */
 class ChatGPTAPI(
     private var sessionToken: String,
+    private var timeout: Duration = 5.minutes,
     private var apiBaseUrl: String = "https://chat.openai.com/api",
-    private var backendApiBaseUrl: String = "https://chat.openai.com/backend-api",
+    internal var backendApiBaseUrl: String = "https://chat.openai.com/backend-api",
     private var userAgent: String = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
 ) : Closeable {
 
@@ -42,12 +45,12 @@ class ChatGPTAPI(
     private val scope = CoroutineScope(Dispatchers.IO)
 
     // ktor http client
-    private val client = HttpClient(OkHttp) {
+    internal val client = HttpClient(OkHttp) {
         install(UserAgent) {
             agent = userAgent
         }
         install(HttpTimeout) {
-            requestTimeoutMillis = 5.minutes.inWholeMilliseconds
+            requestTimeoutMillis = timeout.inWholeMilliseconds
             socketTimeoutMillis = 60.seconds.inWholeMilliseconds
         }
         install(ContentNegotiation) {
@@ -68,78 +71,12 @@ class ChatGPTAPI(
         }
     }
 
-    /**
-     * send message to chat bot
-     * @param message message to send
-     * @param processor a callback function (real-time process the response)
-     * @return response from chat bot after api sends DONE. Sometimes the api may be stuck, to avoid it,
-     * You can use callback function.
-     */
-    suspend fun sendMessage(
-        message: String,
-        processor: ((String) -> Unit)? = null,
-    ): String {
-        val accessToken = this.refreshAccessToken()
-        val body = ConversationJSONBody(
-            conversationId = conversationId,
-            action = "next",
-            messages = listOf(
-                Prompt(
-                    id = UUID.randomUUID().toString(),
-                    role = "user",
-                    content = PromptContent(
-                        contentType = "text",
-                        parts = listOf(message)
-                    )
-                )
-            ),
-            model = "text-davinci-002-render",
-            parentMessageId = parentMessageId
-        )
-        val url = "$backendApiBaseUrl/conversation"
-        var returnMessage = ""
-        val channel = client.preparePost(url) {
-            headers {
-                append("Authorization", "Bearer $accessToken")
-                append("Content-Type", "application/json")
-            }
-            setBody(body)
-        }.execute { response: HttpResponse ->
-            val channel = response.bodyAsChannel()
-            while (!channel.isClosedForRead) {
-                var data = channel.readUTF8Line() ?: continue
-                if (!data.startsWith("data:")) {
-                    continue
-                }
-                data = data.substring(6)
-                if (data == "[DONE]") {
-                    break
-                }
-                val parseData = ObjectMapper().apply {
-                    propertyNamingStrategy = PropertyNamingStrategies.SNAKE_CASE
-                    registerKotlinModule()
-                }.readValue(data, ConversationResponseEvent::class.java)
-                this.conversationId = parseData.conversationId
-                this.parentMessageId = parseData.message?.id ?: this.parentMessageId
-                returnMessage = parseData.message?.content?.parts?.getOrNull(0) ?: continue
-                if (processor != null) {
-                    processor(returnMessage)
-                }
-            }
-        }
-        return returnMessage
-    }
-
-    /**
-     * reset the conversation
-     */
-    fun resetConversation() {
-        this.conversationId = null
-        this.parentMessageId = UUID.randomUUID().toString()
+    fun newConversation(): Conversation {
+        return Conversation(this)
     }
 
     @Throws(IllegalStateException::class)
-    private suspend fun refreshAccessToken(): String {
+    internal suspend fun refreshAccessToken(): String {
         cachedAccessToken.get()?.let { return it }
         val result = client.get("$apiBaseUrl/auth/session") {
             headers {
