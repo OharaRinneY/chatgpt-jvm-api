@@ -2,7 +2,6 @@ package moe.yiheng
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -21,6 +20,14 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
+/**
+ * ChatGPT API
+ * remember close after use.
+ * @param sessionToken session token from cookie
+ * @param apiBaseUrl optional, default is https://chat.openai.com/api
+ * @param backendApiBaseUrl optional, default is https://chat.openai.com/backend-api
+ * @param userAgent optional
+ */
 class ChatGPTAPI(
     private var sessionToken: String,
     private var apiBaseUrl: String = "https://chat.openai.com/api",
@@ -28,7 +35,7 @@ class ChatGPTAPI(
     private var userAgent: String = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
 ) : Closeable {
 
-    // access token cache
+    // thread-safe access token cache
     private var cachedAccessToken: AtomicReference<String?> = AtomicReference(null)
 
     // kotlin coroutine scope
@@ -50,7 +57,6 @@ class ChatGPTAPI(
         }
     }
 
-    // parent message id
     private var parentMessageId: String = UUID.randomUUID().toString()
     private var conversationId: String? = null
 
@@ -62,6 +68,13 @@ class ChatGPTAPI(
         }
     }
 
+    /**
+     * send message to chat bot
+     * @param message message to send
+     * @param processor a callback function (real-time process the response)
+     * @return response from chat bot after api sends DONE. Sometimes the api may be stuck, to avoid it,
+     * You can use callback function.
+     */
     suspend fun sendMessage(
         message: String,
         processor: ((String) -> Unit)? = null,
@@ -117,8 +130,16 @@ class ChatGPTAPI(
         return returnMessage
     }
 
+    /**
+     * reset the conversation
+     */
+    fun resetConversation() {
+        this.conversationId = null
+        this.parentMessageId = UUID.randomUUID().toString()
+    }
+
     @Throws(IllegalStateException::class)
-    suspend fun refreshAccessToken(): String {
+    private suspend fun refreshAccessToken(): String {
         cachedAccessToken.get()?.let { return it }
         val result = client.get("$apiBaseUrl/auth/session") {
             headers {

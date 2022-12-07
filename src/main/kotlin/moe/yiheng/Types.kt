@@ -1,10 +1,7 @@
 package moe.yiheng
 
-import com.fasterxml.jackson.annotation.JsonAlias
-import com.fasterxml.jackson.annotation.JsonAutoDetect
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
-import jdk.jfr.ContentType
 
 data class SessionResult(
     var user: User,
